@@ -4,9 +4,6 @@ import base64
 import zipfile
 from io import BytesIO
 from datetime import datetime
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-
 from database import SessionLocal, engine
 from models import Farmer, Woreda, Kebele, create_tables
 
@@ -14,109 +11,100 @@ from models import Farmer, Woreda, Kebele, create_tables
 st.set_page_config(page_title="2025 Amhara Survey", page_icon="🌾", layout="wide")
 create_tables()
 
-# Initialize Navigation State
 if "current_page" not in st.session_state: 
     st.session_state["current_page"] = "Home"
 
-# Function to handle navigation
 def nav(page):
     st.session_state["current_page"] = page
     st.rerun()
 
-# --- HELPER FUNCTIONS ---
 def to_base64(uploaded_file):
-    if uploaded_file:
-        return base64.b64encode(uploaded_file.getvalue()).decode()
+    if uploaded_file: return base64.b64encode(uploaded_file.getvalue()).decode()
     return None
-
-@st.cache_resource
-def init_gsheet():
-    try:
-        creds_dict = st.secrets["gcp_service_account"]
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        creds = ServiceAccountCredentials.from_json(creds_dict, scope)
-        return gspread.authorize(creds).open('2025 Amhara Planting Survey').get_worksheet(0)
-    except: 
-        return None
 
 # --- PAGES ---
 def home_page():
     st.title("🌾 Amhara Planting Survey 2025")
-    st.write("Survey Management Dashboard")
     st.divider()
-    
     c1, c2 = st.columns(2)
-    with c1:
-        if st.button("📝 NEW REGISTRATION", use_container_width=True, type="primary"): 
-            nav("Register")
-        if st.button("📍 SETUP LOCATIONS", use_container_width=True): 
-            nav("Locations")
-    with c2:
-        if st.button("💾 EXPORT DATA", use_container_width=True): 
-            nav("Download")
-        if st.button("🛠️ EDIT RECORDS", use_container_width=True): 
-            nav("Edit")
+    if c1.button("📝 NEW REGISTRATION", use_container_width=True, type="primary"): nav("Register")
+    if c2.button("📊 VIEW & DOWNLOAD DATA", use_container_width=True): nav("Download")
 
 def register_page():
     st.button("⬅️ Back to Home", on_click=lambda: nav("Home"))
     st.header("📝 Farmer Registration")
     db = SessionLocal()
-    woredas = db.query(Woreda).all()
+    
+    # 1. Fetch Existing Woredas
+    woreda_list = [w.name for w in db.query(Woreda).all()]
     
     with st.form("reg_form", clear_on_submit=True):
-        name = st.text_input("Farmer Full Name")
-        sel_woreda = st.selectbox("Select Woreda", ["Select..."] + [w.name for w in woredas])
+        name = st.text_input("Farmer Full Name / የገበሬው ሙሉ ስም")
+        
+        # --- WOREDA SECTION ---
+        st.write("📍 **Woreda / ወረዳ**")
+        w_col1, w_col2 = st.columns(2)
+        sel_woreda = w_col1.selectbox("Select Existing", ["None / አዲስ ጻፍ"] + woreda_list)
+        type_woreda = w_col2.text_input("Or Type New / ወይም አዲስ እዚህ ይጻፉ")
+        
+        # Determine which Woreda name to use
+        final_woreda = type_woreda.strip() if type_woreda else (None if sel_woreda == "None / አዲስ ጻፍ" else sel_woreda)
+
+        # --- KEBELE SECTION ---
+        st.write("📍 **Kebele / ቀበሌ**")
+        k_col1, k_col2 = st.columns(2)
         
         kebeles = []
-        if sel_woreda != "Select...":
-            w_obj = db.query(Woreda).filter(Woreda.name == sel_woreda).first()
-            kebeles = [k.name for k in w_obj.kebeles] if w_obj else []
+        if final_woreda and sel_woreda != "None / አዲስ ጻፍ":
+            w_obj = db.query(Woreda).filter(Woreda.name == final_woreda).first()
+            if w_obj: kebeles = [k.name for k in w_obj.kebeles]
         
-        sel_kebele = st.selectbox("Select Kebele", ["Select..."] + kebeles)
-        phone = st.text_input("Phone Number")
-        audio = st.file_uploader("🎤 Upload Audio Recording", type=['mp3', 'wav', 'm4a'])
+        sel_kebele = k_col1.selectbox("Select Existing", ["None / አዲስ ጻፍ"] + kebeles)
+        type_kebele = k_col2.text_input("Or Type New / ወይም አዲስ እዚህ ይጻፉ")
         
-        if st.form_submit_button("Save Registration"):
-            if name and sel_woreda != "Select..." and sel_kebele != "Select...":
+        final_kebele = type_kebele.strip() if type_kebele else (None if sel_kebele == "None / አዲስ ጻፍ" else sel_kebele)
+
+        phone = st.text_input("Phone Number / ስልክ ቁጥር")
+        audio = st.file_uploader("🎤 Upload Audio Recording / ድምፅ ይጫኑ", type=['mp3', 'wav', 'm4a'])
+        
+        if st.form_submit_button("Save Registration / መረጃውን መዝግብ"):
+            if name and final_woreda and final_kebele:
+                # Logic to auto-save new Woreda/Kebele to database for next time
+                w_obj = db.query(Woreda).filter(Woreda.name == final_woreda).first()
+                if not w_obj:
+                    w_obj = Woreda(name=final_woreda)
+                    db.add(w_obj); db.commit(); db.refresh(w_obj)
+                
+                k_obj = db.query(Kebele).filter(Kebele.name == final_kebele, Kebele.woreda_id == w_obj.id).first()
+                if not k_obj:
+                    db.add(Kebele(name=final_kebele, woreda_id=w_obj.id))
+                
+                # Save Farmer
                 new_farmer = Farmer(
-                    name=name, 
-                    woreda=sel_woreda, 
-                    kebele=sel_kebele,
-                    phone=phone, 
-                    audio_data=to_base64(audio),
-                    registered_by="Open Access" # No specific user logged in
+                    name=name, woreda=final_woreda, kebele=final_kebele,
+                    phone=phone, audio_data=to_base64(audio), registered_by="Open"
                 )
                 db.add(new_farmer); db.commit()
-                st.success(f"✅ Record for {name} saved successfully!")
-            else: 
-                st.error("⚠️ Please provide Name, Woreda, and Kebele.")
+                st.success(f"✅ Saved: {name} ({final_woreda}, {final_kebele})")
+            else:
+                st.error("⚠️ Name, Woreda, and Kebele are required!")
     db.close()
 
 def download_page():
-    st.button("⬅️ Back to Home", on_click=lambda: nav("Home"))
-    st.header("📊 Export Data")
+    st.button("⬅️ Back", on_click=lambda: nav("Home"))
     db = SessionLocal()
     farmers = db.query(Farmer).all()
     if farmers:
-        df = pd.DataFrame([{
-            "ID": f.id, 
-            "Farmer": f.name, 
-            "Woreda": f.woreda, 
-            "Kebele": f.kebele, 
-            "Phone": f.phone,
-            "Date": f.timestamp
-        } for f in farmers])
+        df = pd.DataFrame([{"ID": f.id, "Farmer": f.name, "Woreda": f.woreda, "Kebele": f.kebele, "Phone": f.phone, "Date": f.timestamp} for f in farmers])
         st.dataframe(df, use_container_width=True)
-        
-        # Audio ZIP logic
-        buf = BytesIO()
-        with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as zf:
-            for f in farmers:
-                if f.audio_data:
-                    zf.writestr(f"Audio_{f.id}_{f.name}.mp3", base64.b64decode(f.audio_data))
-        
-        c1, c2 = st.columns(2)
-        c1.download_button("📥 Download Excel (CSV)", df.to_csv(index=False).encode('utf-8-sig'), "Survey_Data.csv", use_container_width=True)
-        c2.download_button("🎤 Download All Audios (ZIP)", buf.getvalue(), "Audios.zip", use_container_width=True)
-    else:
-        st.info("No
+        st.download_button("📥 Download Excel", df.to_csv(index=False).encode('utf-8-sig'), "Survey_Data.csv")
+    else: st.info("No records yet.")
+    db.close()
+
+def main():
+    pg = st.session_state["current_page"]
+    if pg == "Home": home_page()
+    elif pg == "Register": register_page()
+    elif pg == "Download": download_page()
+
+if __name__ == "__main__": main()
