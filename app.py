@@ -121,29 +121,6 @@ elif st.session_state["page"] == "Data":
                 st.rerun()
 
             st.divider()
-
-            # --- INDIVIDUAL RECORDS SECTION ---
-            st.subheader("📋 Individual Records List")
-            for f in farmers:
-                with st.container(border=True):
-                    c1, c2, c3 = st.columns([3, 1, 1])
-                    c1.write(f"**ID: {f.id}** | {f.name} ({f.woreda}) | 👤 {f.registered_by}")
-                    
-                    if c2.button("✏️ Edit", key=f"edit_{f.id}"):
-                        st.session_state["edit_id"] = f.id
-                    
-                    if c3.button("🗑️ Delete ID", key=f"del_{f.id}"):
-                        db.delete(f); db.commit()
-                        st.rerun()
-                    
-                    # Edit Form
-                    if st.session_state["edit_id"] == f.id:
-                        with st.form(f"f_edit_{f.id}"):
-                            new_n = st.text_input("Update Name", value=f.name)
-                            if st.form_submit_button("Update"):
-                                f.name = new_n
-                                db.commit(); st.session_state["edit_id"] = None
-                                st.rerun()
         else:
             st.info("No records found.")
         db.close()
