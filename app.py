@@ -29,7 +29,7 @@ def to_base64(uploaded_file):
 def home_page():
     st.title("🌾 Amhara Planting Survey 2025")
     if st.session_state["editor_name"]:
-        st.info(f"👤 Current Editor: **{st.session_state['editor_name']}**")
+        st.success(f"👤 Active Editor: **{st.session_state['editor_name']}**")
     
     st.divider()
     col1, col2 = st.columns(2)
@@ -49,55 +49,53 @@ def register_page():
 
     st.header("📝 Farmer Registration")
 
-    # LOGIN LOGIC: Ask for name ONLY ONCE
+    # 1. Editor Login (Once)
     if not st.session_state["editor_name"]:
         with st.container(border=True):
-            st.subheader("Editor Login")
-            name_input = st.text_input("Enter Your Name to Begin")
-            if st.button("Start Registering"):
+            st.subheader("Editor Login / የመዝጋቢው መለያ")
+            name_input = st.text_input("Enter Your Name (Registered By)")
+            if st.button("Login & Start"):
                 if name_input.strip():
                     st.session_state["editor_name"] = name_input.strip()
                     st.rerun()
                 else:
-                    st.error("Please enter a name.")
+                    st.error("Please enter your name.")
         return
 
-    # REGISTRATION FORM
+    # 2. Registration Form
     db = SessionLocal()
     try:
         woreda_objs = db.query(Woreda).order_by(Woreda.name).all()
-        woreda_list = [w.name for w in woreda_objs]
+        w_list = [w.name for w in woreda_objs]
         
         with st.form(key="farmer_reg_form", clear_on_submit=True):
             st.write(f"Logged in as: **{st.session_state['editor_name']}**")
-            farmer_name = st.text_input("Farmer Full Name")
-            
-            w_col1, w_col2 = st.columns(2)
-            sel_woreda = w_col1.selectbox("Select Woreda", ["None"] + woreda_list)
-            type_woreda = w_col2.text_input("Or Type New Woreda")
-            final_woreda = type_woreda.strip() if type_woreda.strip() else (None if sel_woreda == "None" else sel_woreda)
-
-            phone = st.text_input("Phone Number")
-            audio = st.file_uploader("Upload Audio", type=['mp3', 'wav'])
+            f_name = st.text_input("Farmer Full Name / የገበሬው ሙሉ ስም")
+            woreda = st.text_input("Woreda / ወረዳ")
+            kebele = st.text_input("Kebele / ቀበሌ")
+            phone = st.text_input("Phone / ስልክ")
+            audio = st.file_uploader("Upload Audio", type=['mp3', 'wav', 'm4a'])
             
             if st.form_submit_button("Save Registration"):
-                if farmer_name and final_woreda:
-                    new_f = Farmer(name=farmer_name, woreda=final_woreda, phone=phone, 
+                if f_name and woreda:
+                    new_f = Farmer(name=f_name, woreda=woreda, kebele=kebele, phone=phone, 
                                    audio_data=to_base64(audio), registered_by=st.session_state["editor_name"])
                     db.add(new_f); db.commit()
                     st.success("✅ Saved Successfully!")
+                else:
+                    st.error("Name and Woreda are required.")
     finally:
         db.close()
 
-# --- PAGE: VIEW/EDIT/DELETE ---
+# --- PAGE: VIEW / EDIT / DELETE / DOWNLOAD ---
 def download_page():
     if st.button("⬅️ Back to Home"):
         st.session_state["current_page"] = "Home"
         st.rerun()
 
-    st.header("📊 Data Management")
+    st.header("📊 Data Management Center")
     
-    # PASSCODE PROTECTION
+    # Passcode Gate
     if not st.session_state["authenticated"]:
         passcode = st.text_input("Enter Admin Passcode", type="password")
         if passcode == "oaf2025":
@@ -107,47 +105,65 @@ def download_page():
 
     db = SessionLocal()
     try:
-        farmers = db.query(Farmer).all()
+        farmers = db.query(Farmer).order_by(Farmer.id.desc()).all()
         if not farmers:
             st.info("No records found.")
             return
 
-        # DATA TABLE DISPLAY
+        # DATA MANAGEMENT TABLE
         for f in farmers:
-            with st.expander(f"👤 {f.name} - {f.woreda}"):
-                col1, col2, col3 = st.columns([2,1,1])
-                col1.write(f"**Phone:** {f.phone} | **Editor:** {f.registered_by}")
+            with st.expander(f"🆔 ID: {f.id} | 👤 {f.name} ({f.woreda})"):
+                col1, col2, col3 = st.columns([3, 1, 1])
+                col1.write(f"**Phone:** {f.phone} | **By:** {f.registered_by} | **Date:** {f.timestamp.strftime('%Y-%m-%d')}")
                 
-                # EDIT BUTTON
+                # Edit Logic
                 if col2.button("✏️ Edit", key=f"edit_{f.id}"):
                     st.session_state["editing_id"] = f.id
                 
-                # DELETE BUTTON
+                # Delete Logic
                 if col3.button("🗑️ Delete", key=f"del_{f.id}", type="secondary"):
-                    db.delete(f); db.commit()
+                    db.delete(f)
+                    db.commit()
                     st.rerun()
 
-                # SHOW EDIT FORM IF CLICKED
+                # If Editing this specific ID
                 if st.session_state["editing_id"] == f.id:
-                    with st.form(key=f"edit_form_{f.id}"):
-                        new_name = st.text_input("New Name", value=f.name)
-                        new_woreda = st.text_input("New Woreda", value=f.woreda)
-                        if st.form_submit_button("Update"):
-                            f.name = new_name
-                            f.woreda = new_woreda
+                    with st.form(key=f"f_edit_{f.id}"):
+                        edit_name = st.text_input("Edit Name", value=f.name)
+                        edit_phone = st.text_input("Edit Phone", value=f.phone)
+                        if st.form_submit_button("Update Record"):
+                            f.name = edit_name
+                            f.phone = edit_phone
                             db.commit()
                             st.session_state["editing_id"] = None
                             st.rerun()
-        
+
         st.divider()
-        # DOWNLOAD SECTION
-        df = pd.DataFrame([{"ID": f.id, "Name": f.name, "Woreda": f.woreda, "Editor": f.registered_by} for f in farmers])
-        st.download_button("📥 Download CSV", df.to_csv(index=False), "data.csv", "text/csv")
+        st.subheader("📥 Export Data")
+        c1, c2 = st.columns(2)
         
+        # Download Excel (CSV)
+        df = pd.DataFrame([{
+            "ID": f.id, "Name": f.name, "Woreda": f.woreda, "Kebele": f.kebele, 
+            "Phone": f.phone, "Registered By": f.registered_by, "Date": f.timestamp
+        } for f in farmers])
+        c1.download_button("📥 Download Excel (CSV)", df.to_csv(index=False).encode('utf-8-sig'), "Survey_Data.csv", "text/csv")
+        
+        # Download Audio ZIP
+        zip_buf = BytesIO()
+        with zipfile.ZipFile(zip_buf, "a", zipfile.ZIP_DEFLATED) as zf:
+            a_count = 0
+            for f in farmers:
+                if f.audio_data:
+                    zf.writestr(f"ID_{f.id}_{f.name}.mp3", base64.b64decode(f.audio_data))
+                    a_count += 1
+        if a_count > 0:
+            c2.download_button(f"🎤 Download {a_count} Audios (ZIP)", zip_buf.getvalue(), "Audios.zip", "application/zip")
+
     finally:
         db.close()
 
-# --- MAIN ENGINE ---
+# --- MAIN ---
 def main():
     if st.session_state["current_page"] == "Home": home_page()
     elif st.session_state["current_page"] == "Register": register_page()
