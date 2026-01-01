@@ -44,6 +44,11 @@ def register_page():
         woreda_list = [w.name for w in woreda_objs]
         
         with st.form(key="farmer_reg_v2", clear_on_submit=True):
+            # NEW: Editor Name Field
+            editor_name = st.text_input("Editor Name / የመዝጋቢው ስም", placeholder="Enter your name here", key="editor_name")
+            
+            st.divider()
+            
             name = st.text_input("Farmer Full Name / የገበሬው ሙሉ ስም", key="f_name")
             
             st.write("📍 **Location Details**")
@@ -69,8 +74,9 @@ def register_page():
             submit_btn = st.form_submit_button("Save Registration")
             
             if submit_btn:
-                if name and final_woreda and final_kebele:
-                    # Save Logic
+                # Validation including the Editor Name
+                if name and final_woreda and final_kebele and editor_name:
+                    # Save Woreda/Kebele logic
                     w_obj = db.query(Woreda).filter(Woreda.name == final_woreda).first()
                     if not w_obj:
                         w_obj = Woreda(name=final_woreda)
@@ -80,14 +86,19 @@ def register_page():
                     if not k_obj:
                         db.add(Kebele(name=final_kebele, woreda_id=w_obj.id)); db.commit()
                     
+                    # Save Farmer with Editor Name
                     new_farmer = Farmer(
-                        name=name, woreda=final_woreda, kebele=final_kebele,
-                        phone=phone, audio_data=to_base64(audio), registered_by="Public"
+                        name=name, 
+                        woreda=final_woreda, 
+                        kebele=final_kebele,
+                        phone=phone, 
+                        audio_data=to_base64(audio), 
+                        registered_by=editor_name # Saves the editor's name
                     )
                     db.add(new_farmer); db.commit()
-                    st.success(f"✅ Saved {name}!")
+                    st.success(f"✅ Saved {name} (Registered by {editor_name})!")
                 else:
-                    st.error("⚠️ Fill Name, Woreda, and Kebele.")
+                    st.error("⚠️ Fill Name, Woreda, Kebele, and Editor Name.")
     finally:
         db.close()
 
@@ -100,7 +111,13 @@ def download_page():
         farmers = db.query(Farmer).all()
         if farmers:
             df = pd.DataFrame([{
-                "ID": f.id, "Farmer": f.name, "Woreda": f.woreda, "Kebele": f.kebele, "Phone": f.phone, "Date": f.timestamp
+                "ID": f.id, 
+                "Farmer": f.name, 
+                "Woreda": f.woreda, 
+                "Kebele": f.kebele, 
+                "Phone": f.phone, 
+                "Registered By": f.registered_by, # Now visible in the export
+                "Date": f.timestamp
             } for f in farmers])
             st.dataframe(df, use_container_width=True)
             
