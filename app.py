@@ -10,8 +10,11 @@ from models import Farmer, Woreda, Kebele, create_tables
 st.set_page_config(page_title="2025 Amhara Survey", page_icon="🌾", layout="wide")
 create_tables()
 
+# Initialize session states
 if "current_page" not in st.session_state:
     st.session_state["current_page"] = "Home"
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
 
 def to_base64(uploaded_file):
     if uploaded_file:
@@ -45,10 +48,8 @@ def register_page():
         woreda_list = [w.name for w in woreda_objs]
         
         with st.form(key="farmer_reg_v4", clear_on_submit=True):
-            # Editor / Registered By Field
-            editor_name = st.text_input("Registered By (Editor Name) / የመዝጋቢው ስም", placeholder="Enter your full name", key="editor_val")
+            editor_name = st.text_input("Registered By / የመዝጋቢው ስም", key="editor_val")
             st.divider()
-            
             farmer_name = st.text_input("Farmer Full Name / የገበሬው ሙሉ ስም", key="f_val")
             
             st.write("📍 **Location Details**")
@@ -72,7 +73,6 @@ def register_page():
             
             if st.form_submit_button("Save Registration"):
                 if farmer_name and final_woreda and final_kebele and editor_name:
-                    # Sync Woreda/Kebele
                     w_obj = db.query(Woreda).filter(Woreda.name == final_woreda).first()
                     if not w_obj:
                         w_obj = Woreda(name=final_woreda)
@@ -81,42 +81,55 @@ def register_page():
                     if not k_obj:
                         db.add(Kebele(name=final_kebele, woreda_id=w_obj.id)); db.commit()
                     
-                    # Save Farmer with Registered By info
                     new_f = Farmer(name=farmer_name, woreda=final_woreda, kebele=final_kebele,
                                    phone=phone, audio_data=to_base64(audio), registered_by=editor_name)
                     db.add(new_f); db.commit()
                     st.success(f"✅ Saved! Registered by: {editor_name}")
                 else:
-                    st.error("⚠️ Error: Name, Woreda, Kebele, and Editor Name are all required.")
+                    st.error("⚠️ All fields are required.")
     finally:
         db.close()
 
-# --- PAGE: DOWNLOAD (PASSCODE PROTECTED) ---
+# --- PAGE: DOWNLOAD (HIDES PASSCODE AFTER SUCCESS) ---
 def download_page():
-    if st.button("⬅️ Back to Home"):
+    # Back button and Logout logic
+    col_a, col_b = st.columns([8, 2])
+    if col_a.button("⬅️ Back to Home"):
         st.session_state["current_page"] = "Home"
         st.rerun()
-        
-    st.header("📊 Admin Data Access")
     
-    # Passcode Gate
-    passcode = st.text_input("Enter Passcode to View Data", type="password", key="p_gate")
+    if st.session_state["authenticated"]:
+        if col_b.button("🔒 Logout"):
+            st.session_state["authenticated"] = False
+            st.rerun()
+
+    st.header("📊 Admin Data Export")
+
+    # Only show passcode field if NOT authenticated
+    if not st.session_state["authenticated"]:
+        passcode = st.text_input("Enter Passcode to View Data", type="password")
+        if passcode == "oaf2025":
+            st.session_state["authenticated"] = True
+            st.rerun() # Refresh to hide the input and show data
+        elif passcode != "":
+            st.error("❌ Incorrect Passcode")
     
-    if passcode == "oaf2025":
-        st.success("Access Granted")
+    # If authenticated, show the data
+    else:
+        st.info("🔓 Access Granted: Viewing Protected Records")
         db = SessionLocal()
         try:
             farmers = db.query(Farmer).all()
             if farmers:
-                # Table including "Registered By"
                 df = pd.DataFrame([{
                     "ID": f.id, "Farmer": f.name, "Woreda": f.woreda, "Kebele": f.kebele, 
                     "Phone": f.phone, "Registered By": f.registered_by, "Date": f.timestamp
                 } for f in farmers])
+                
                 st.dataframe(df, use_container_width=True)
                 
                 c1, c2 = st.columns(2)
-                c1.download_button("📥 Download CSV", df.to_csv(index=False).encode('utf-8-sig'), "Survey_Data.csv", "text/csv")
+                c1.download_button("📥 Download CSV", df.to_csv(index=False).encode('utf-8-sig'), "Survey.csv", "text/csv")
                 
                 # Audio ZIP
                 buf = BytesIO()
@@ -129,11 +142,9 @@ def download_page():
                 if count > 0:
                     c2.download_button(f"🎤 Download {count} Audios (ZIP)", buf.getvalue(), "Audios.zip", "application/zip")
             else:
-                st.info("No records found yet.")
+                st.info("No records yet.")
         finally:
             db.close()
-    elif passcode != "":
-        st.error("❌ Incorrect Passcode")
 
 # --- MAIN ---
 def main():
@@ -144,3 +155,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
