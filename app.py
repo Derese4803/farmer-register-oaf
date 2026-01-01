@@ -16,11 +16,12 @@ class Farmer(Base):
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     name = Column(String, nullable=False)
     woreda = Column(String)
+    kebele = Column(String)  # Added Kebele
     phone = Column(String)
     audio_data = Column(Text) 
     registered_by = Column(String)
 
-engine = create_engine("sqlite:///./survey_2026.db", connect_args={"check_same_thread": False})
+engine = create_engine("sqlite:///./survey_2026_v2.db", connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
 Base.metadata.create_all(bind=engine)
 
@@ -49,7 +50,7 @@ if st.session_state["page"] == "Home":
     if col1.button("📝 NEW REGISTRATION", use_container_width=True, type="primary"): nav("Reg")
     if col2.button("📊 ADMIN DASHBOARD", use_container_width=True): nav("Data")
 
-# --- 5. PAGE: REGISTRATION ---
+# --- 5. PAGE: REGISTRATION (With Kebele) ---
 elif st.session_state["page"] == "Reg":
     st.button("⬅️ Home", on_click=lambda: nav("Home"))
     
@@ -66,22 +67,24 @@ elif st.session_state["page"] == "Reg":
             st.info(f"Logging as: {st.session_state['editor']}")
             f_name = st.text_input("Farmer Name")
             woreda = st.text_input("Woreda")
+            kebele = st.text_input("Kebele") # New Field
             phone = st.text_input("Phone Number")
             audio = st.file_uploader("🎤 Audio", type=['mp3','wav','m4a'])
             
             if st.form_submit_button("Save"):
-                if f_name and woreda:
+                if f_name and woreda and kebele:
                     db = SessionLocal()
-                    db.add(Farmer(name=f_name, woreda=woreda, phone=phone, 
+                    db.add(Farmer(name=f_name, woreda=woreda, kebele=kebele, phone=phone, 
                                   audio_data=to_b64(audio), registered_by=st.session_state["editor"]))
                     db.commit(); db.close()
-                    st.success("✅ Saved!")
+                    st.success(f"✅ Saved record for {f_name}!")
+                else:
+                    st.error("Name, Woreda, and Kebele are required.")
 
-# --- 6. PAGE: ADMIN (ONLY DOWNLOADS & DELETE ALL) ---
+# --- 6. PAGE: ADMIN (Passcode: oaf2026) ---
 elif st.session_state["page"] == "Data":
     st.button("⬅️ Home", on_click=lambda: nav("Home"))
     
-    # --- PASSCODE LOCK (oaf2026) ---
     if not st.session_state["auth"]:
         st.header("🔒 Admin Access")
         pass_input = st.text_input("Enter Passcode", type="password")
@@ -98,20 +101,20 @@ elif st.session_state["page"] == "Data":
         
         col_t, col_l = st.columns([8, 2])
         col_t.header("📊 Admin Management")
-        if col_l.button("🔒 Lock"):
+        if col_l.button("🔒 Lock Admin"):
             st.session_state["auth"] = False
             st.rerun()
 
         if farmers:
-            # --- DOWNLOAD BUTTONS ---
             st.subheader("📥 Data Export")
             c1, c2 = st.columns(2)
             
+            # Export now includes Kebele
             df = pd.DataFrame([{
-                "ID": f.id, "Name": f.name, "Woreda": f.woreda, "Phone": f.phone,
-                "By": f.registered_by, "Date": f.timestamp
+                "ID": f.id, "Name": f.name, "Woreda": f.woreda, "Kebele": f.kebele, 
+                "Phone": f.phone, "By": f.registered_by, "Date": f.timestamp
             } for f in farmers])
-            c1.download_button("📥 Excel Download", df.to_csv(index=False).encode('utf-8-sig'), "Data_2026.csv", use_container_width=True)
+            c1.download_button("📥 Excel Download", df.to_csv(index=False).encode('utf-8-sig'), "SurveyData_2026.csv", use_container_width=True)
             
             z_buf = BytesIO()
             with zipfile.ZipFile(z_buf, "w") as zf:
@@ -122,14 +125,13 @@ elif st.session_state["page"] == "Data":
 
             st.divider()
 
-            # --- DELETE ALL BUTTON ---
             st.subheader("🗑️ Database Control")
-            st.error("Warning: Clicking below will delete all records forever.")
+            st.error("This will delete all records forever.")
             if st.button("DELETE ALL RECORDS FROM DATABASE", type="primary", use_container_width=True):
                 db.query(Farmer).delete()
                 db.commit()
                 st.success("All data cleared.")
                 st.rerun()
         else:
-            st.info("No records to manage.")
+            st.info("No records found.")
         db.close()
