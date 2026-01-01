@@ -7,7 +7,7 @@ from io import BytesIO
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# --- 1. DATABASE SETUP ---
+# --- 1. DATABASE & MODEL SETUP ---
 Base = declarative_base()
 
 class Farmer(Base):
@@ -16,12 +16,13 @@ class Farmer(Base):
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     name = Column(String, nullable=False)
     woreda = Column(String)
-    kebele = Column(String)  # Added Kebele
+    kebele = Column(String)
     phone = Column(String)
     audio_data = Column(Text) 
     registered_by = Column(String)
 
-engine = create_engine("sqlite:///./survey_2026_v2.db", connect_args={"check_same_thread": False})
+# Database Connection
+engine = create_engine("sqlite:///./amhara_me_2026.db", connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
 Base.metadata.create_all(bind=engine)
 
@@ -50,7 +51,7 @@ if st.session_state["page"] == "Home":
     if col1.button("📝 NEW REGISTRATION", use_container_width=True, type="primary"): nav("Reg")
     if col2.button("📊 ADMIN DASHBOARD", use_container_width=True): nav("Data")
 
-# --- 5. PAGE: REGISTRATION (With Kebele) ---
+# --- 5. PAGE: REGISTRATION ---
 elif st.session_state["page"] == "Reg":
     st.button("⬅️ Home", on_click=lambda: nav("Home"))
     
@@ -64,14 +65,14 @@ elif st.session_state["page"] == "Reg":
                     st.rerun()
     else:
         with st.form("reg_form", clear_on_submit=True):
-            st.info(f"Logging as: {st.session_state['editor']}")
+            st.info(f"M&E Logging as: {st.session_state['editor']}")
             f_name = st.text_input("Farmer Name")
             woreda = st.text_input("Woreda")
-            kebele = st.text_input("Kebele") # New Field
+            kebele = st.text_input("Kebele")
             phone = st.text_input("Phone Number")
-            audio = st.file_uploader("🎤 Audio", type=['mp3','wav','m4a'])
+            audio = st.file_uploader("🎤 Audio Recording", type=['mp3','wav','m4a'])
             
-            if st.form_submit_button("Save"):
+            if st.form_submit_button("Save Registration"):
                 if f_name and woreda and kebele:
                     db = SessionLocal()
                     db.add(Farmer(name=f_name, woreda=woreda, kebele=kebele, phone=phone, 
@@ -88,7 +89,7 @@ elif st.session_state["page"] == "Data":
     if not st.session_state["auth"]:
         st.header("🔒 Admin Access")
         pass_input = st.text_input("Enter Passcode", type="password")
-        if st.button("Unlock"):
+        if st.button("Unlock Dashboard"):
             if pass_input == "oaf2026": 
                 st.session_state["auth"] = True
                 st.rerun()
@@ -101,7 +102,7 @@ elif st.session_state["page"] == "Data":
         
         col_t, col_l = st.columns([8, 2])
         col_t.header("📊 Admin Management")
-        if col_l.button("🔒 Lock Admin"):
+        if col_l.button("🔒 Lock Dashboard"):
             st.session_state["auth"] = False
             st.rerun()
 
@@ -109,29 +110,30 @@ elif st.session_state["page"] == "Data":
             st.subheader("📥 Data Export")
             c1, c2 = st.columns(2)
             
-            # Export now includes Kebele
+            # Excel/CSV
             df = pd.DataFrame([{
                 "ID": f.id, "Name": f.name, "Woreda": f.woreda, "Kebele": f.kebele, 
                 "Phone": f.phone, "By": f.registered_by, "Date": f.timestamp
             } for f in farmers])
-            c1.download_button("📥 Excel Download", df.to_csv(index=False).encode('utf-8-sig'), "SurveyData_2026.csv", use_container_width=True)
+            c1.download_button("📥 Excel Download", df.to_csv(index=False).encode('utf-8-sig'), "Amhara_ME_Data_2026.csv", use_container_width=True)
             
+            # Audio ZIP
             z_buf = BytesIO()
             with zipfile.ZipFile(z_buf, "w") as zf:
                 for f in farmers:
                     if f.audio_data: 
                         zf.writestr(f"ID_{f.id}_{f.name}.mp3", base64.b64decode(f.audio_data))
-            c2.download_button("🎤 Audio ZIP", z_buf.getvalue(), "Audios_2026.zip", use_container_width=True)
+            c2.download_button("🎤 Audio ZIP", z_buf.getvalue(), "Amhara_ME_Audios.zip", use_container_width=True)
 
             st.divider()
 
             st.subheader("🗑️ Database Control")
-            st.error("This will delete all records forever.")
+            st.error("Warning: This action will permanently delete all survey data.")
             if st.button("DELETE ALL RECORDS FROM DATABASE", type="primary", use_container_width=True):
                 db.query(Farmer).delete()
                 db.commit()
-                st.success("All data cleared.")
+                st.success("All records have been cleared.")
                 st.rerun()
         else:
-            st.info("No records found.")
+            st.info("No records found in the database.")
         db.close()
