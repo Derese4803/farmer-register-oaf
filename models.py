@@ -27,7 +27,7 @@ class Farmer(Base):
     kebele = Column(String)
     phone = Column(String)
     audio_data = Column(Text) 
-    registered_by = Column(String) # Stores the Editor's Name
+    registered_by = Column(String) # Stores Editor Name
 
 def create_tables():
     from database import engine
