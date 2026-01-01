@@ -3,11 +3,11 @@ import pandas as pd
 import base64
 import zipfile
 import datetime
-from io import BytesIO
+from io import BytesIO, StringIO
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# --- 1. DATABASE & MODELS ---
+# --- 1. DATABASE SETUP ---
 Base = declarative_base()
 
 class Farmer(Base):
@@ -18,22 +18,21 @@ class Farmer(Base):
     woreda = Column(String)
     kebele = Column(String)
     phone = Column(String)
-    audio_data = Column(Text)  # Stores audio as base64 string
+    audio_data = Column(Text) 
     registered_by = Column(String)
 
-# Connect to SQLite
-engine = create_engine("sqlite:///./survey_2025.db", connect_args={"check_same_thread": False})
+engine = create_engine("sqlite:///./survey_final.db", connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
 Base.metadata.create_all(bind=engine)
 
-# --- 2. HELPER FUNCTIONS ---
+# --- 2. HELPERS ---
 def to_b64(file):
     if file:
         return base64.b64encode(file.getvalue()).decode()
     return None
 
-# --- 3. APP CONFIG & SESSION STATE ---
-st.set_page_config(page_title="Amhara Survey 2025", layout="wide", page_icon="🌾")
+# --- 3. APP CONFIG ---
+st.set_page_config(page_title="Amhara 2025", layout="wide")
 
 if "page" not in st.session_state: st.session_state["page"] = "Home"
 if "auth" not in st.session_state: st.session_state["auth"] = False
@@ -57,113 +56,96 @@ if st.session_state["page"] == "Home":
 
 # --- 5. PAGE: REGISTRATION ---
 elif st.session_state["page"] == "Reg":
-    st.button("⬅️ Back to Home", on_click=lambda: nav("Home"))
+    st.button("⬅️ Home", on_click=lambda: nav("Home"))
     
-    # Login Section (Once per session)
     if not st.session_state["editor"]:
-        with st.container(border=True):
-            st.subheader("Editor Login")
-            name_input = st.text_input("Enter Your Name / የመዝጋቢ ስም")
-            if st.button("Start Registering"):
-                if name_input.strip():
-                    st.session_state["editor"] = name_input.strip()
-                    st.rerun()
-                else:
-                    st.error("Name is required.")
+        st.subheader("Login Once")
+        name_in = st.text_input("Editor Name:")
+        if st.button("Start"):
+            if name_in: 
+                st.session_state["editor"] = name_in
+                st.rerun()
     else:
-        # Registration Form
-        st.header(f"New Registration (By: {st.session_state['editor']})")
-        with st.form("main_reg_form", clear_on_submit=True):
-            f_name = st.text_input("Farmer Full Name")
+        with st.form("main_form", clear_on_submit=True):
+            st.write(f"Editor: {st.session_state['editor']}")
+            f_name = st.text_input("Farmer Name")
             woreda = st.text_input("Woreda")
-            kebele = st.text_input("Kebele")
-            phone = st.text_input("Phone Number")
-            audio = st.file_uploader("🎤 Upload Audio Recording", type=['mp3','wav','m4a'])
-            
-            if st.form_submit_button("Save Record"):
+            phone = st.text_input("Phone")
+            audio = st.file_uploader("Audio", type=['mp3','wav','m4a'])
+            if st.form_submit_button("Save"):
                 if f_name and woreda:
                     db = SessionLocal()
-                    new_f = Farmer(
-                        name=f_name, woreda=woreda, kebele=kebele, phone=phone, 
-                        audio_data=to_b64(audio), registered_by=st.session_state["editor"]
-                    )
-                    db.add(new_f); db.commit(); db.close()
-                    st.success("✅ Record Saved Successfully!")
-                else:
-                    st.error("Farmer Name and Woreda are required.")
+                    db.add(Farmer(name=f_name, woreda=woreda, phone=phone, 
+                                  audio_data=to_b64(audio), registered_by=st.session_state["editor"]))
+                    db.commit(); db.close()
+                    st.success("✅ Saved!")
 
-# --- 6. PAGE: ADMIN DASHBOARD (Manage & Downloads) ---
+# --- 6. PAGE: ADMIN DASHBOARD ---
 elif st.session_state["page"] == "Data":
-    st.button("⬅️ Back to Home", on_click=lambda: nav("Home"))
+    st.button("⬅️ Home", on_click=lambda: nav("Home"))
     
-    # Admin Security
     if not st.session_state["auth"]:
-        passcode = st.text_input("Enter Admin Passcode", type="password")
-        if passcode == "oaf2025": 
+        pwd = st.text_input("Admin Passcode", type="password")
+        if pwd == "oaf2025": 
             st.session_state["auth"] = True
             st.rerun()
     else:
-        st.header("📊 Management & Exports")
         db = SessionLocal()
-        farmers = db.query(Farmer).order_by(Farmer.id.desc()).all()
+        farmers = db.query(Farmer).all()
         
         if farmers:
-            # --- BULK DOWNLOADS ---
+            st.subheader("📥 Downloads")
             c1, c2 = st.columns(2)
             
-            # Excel Download
+            # --- FIXED EXCEL (CSV with UTF-8 BOM for Amharic Support) ---
             df = pd.DataFrame([{
-                "ID": f.id, "Name": f.name, "Woreda": f.woreda, "Kebele": f.kebele,
-                "Phone": f.phone, "Editor": f.registered_by, "Date": f.timestamp
+                "ID": f.id, "Name": f.name, "Woreda": f.woreda, "Phone": f.phone,
+                "Editor": f.registered_by, "Date": f.timestamp
             } for f in farmers])
-            c1.download_button("📥 Download Excel (CSV)", df.to_csv(index=False).encode('utf-8-sig'), "Survey_Data.csv", "text/csv", use_container_width=True)
             
-            # Audio ZIP Download
+            csv_data = df.to_csv(index=False).encode('utf-8-sig') # utf-8-sig makes it work in Excel
+            c1.download_button("📥 Download Excel (CSV)", csv_data, "Survey_Data.csv", "text/csv")
+            
+            # --- FIXED ZIP GENERATION ---
             zip_buffer = BytesIO()
-            with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zf:
-                count = 0
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                a_count = 0
                 for f in farmers:
                     if f.audio_data:
-                        zf.writestr(f"ID_{f.id}_{f.name}.mp3", base64.b64decode(f.audio_data))
-                        count += 1
-            if count > 0:
-                c2.download_button(f"🎤 Download {count} Audios (ZIP)", zip_buffer.getvalue(), "Audios.zip", use_container_width=True)
+                        try:
+                            # Cleanup name for filename safety
+                            safe_name = "".join([c for c in f.name if c.isalnum() or c in (' ', '_')]).rstrip()
+                            zf.writestr(f"ID_{f.id}_{safe_name}.mp3", base64.b64decode(f.audio_data))
+                            a_count += 1
+                        except: pass
             
-            st.divider()
-            
-            # --- RECORD MANAGEMENT (Edit/Delete) ---
-            st.subheader("📝 Individual Records")
-            for f in farmers:
-                with st.container(border=True):
-                    col1, col2, col3 = st.columns([3, 1, 1])
-                    col1.write(f"**ID: {f.id}** | {f.name} ({f.woreda}) | 👤 {f.registered_by}")
-                    
-                    if col2.button("✏️ Edit", key=f"e_{f.id}"):
-                        st.session_state["edit_id"] = f.id
-                    
-                    if col3.button("🗑️ Delete", key=f"d_{f.id}"):
-                        db.delete(f); db.commit()
-                        st.rerun()
-                    
-                    # Inline Edit Form
-                    if st.session_state["edit_id"] == f.id:
-                        with st.form(f"edit_form_{f.id}"):
-                            new_name = st.text_input("Update Name", value=f.name)
-                            new_woreda = st.text_input("Update Woreda", value=f.woreda)
-                            if st.form_submit_button("Confirm Update"):
-                                f.name = new_name
-                                f.woreda = new_woreda
-                                db.commit()
-                                st.session_state["edit_id"] = None
-                                st.rerun()
+            if a_count > 0:
+                c2.download_button(f"🎤 Download {a_count} Audios (ZIP)", zip_buffer.getvalue(), "Audios.zip", "application/zip")
+            else:
+                c2.warning("No audio files found.")
 
             st.divider()
-            # DELETE ALL BUTTON
-            with st.expander("🚨 Advanced: Delete All Records"):
-                if st.button("CONFIRM: CLEAR ENTIRE DATABASE", type="primary"):
-                    db.query(Farmer).delete()
-                    db.commit()
-                    st.rerun()
+            
+            # --- MANAGE BY ID ---
+            for f in farmers:
+                with st.container(border=True):
+                    col1, col2, col3 = st.columns([3,1,1])
+                    col1.write(f"**ID: {f.id}** | {f.name} | {f.woreda}")
+                    
+                    if col2.button("✏️ Edit", key=f"e{f.id}"): st.session_state["edit_id"] = f.id
+                    if col3.button("🗑️ Delete", key=f"d{f.id}"):
+                        db.delete(f); db.commit(); st.rerun()
+                    
+                    if st.session_state["edit_id"] == f.id:
+                        with st.form(f"f{f.id}"):
+                            u_name = st.text_input("New Name", value=f.name)
+                            if st.form_submit_button("Update"):
+                                f.name = u_name
+                                db.commit(); st.session_state["edit_id"] = None; st.rerun()
+
+            st.divider()
+            if st.button("⚠️ DELETE ALL RECORDS", type="primary"):
+                db.query(Farmer).delete(); db.commit(); st.rerun()
         else:
-            st.info("No records found.")
+            st.info("No records.")
         db.close()
