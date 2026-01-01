@@ -1,228 +1,146 @@
 import streamlit as st
 import pandas as pd
-import os
-import io
+import base64
+import zipfile
+from io import BytesIO
 from datetime import datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# --- EXTERNAL FILE IMPORTS ---
-try:
-    from database import SessionLocal
-    from models import Farmer, Woreda, Kebele, create_tables
-    from auth import login_user
-except ImportError:
-    st.error("⚠️ System Files Missing! Please ensure models.py, database.py, and auth.py are in your repository.")
-    st.stop()
+from database import SessionLocal, engine
+from models import Farmer, Woreda, Kebele, create_tables
 
-# --- INITIAL SETUP ---
-st.set_page_config(page_title="2025 Amhara Planting Survey", page_icon="🌾", layout="wide")
-AUDIO_UPLOAD_DIR = "uploads"
-os.makedirs(AUDIO_UPLOAD_DIR, exist_ok=True)
+# --- SETUP ---
+st.set_page_config(page_title="2025 Amhara Survey", page_icon="🌾", layout="wide")
 create_tables()
 
-# Initialize Navigation State
-if "current_page" not in st.session_state:
-    st.session_state["current_page"] = "Home"
+if "current_page" not in st.session_state: st.session_state["current_page"] = "Home"
+if "logged_in" not in st.session_state: st.session_state["logged_in"] = False
 
-def change_page(page_name):
-    st.session_state["current_page"] = page_name
+def nav(page):
+    st.session_state["current_page"] = page
     st.rerun()
 
-# --- GOOGLE SHEETS CONNECTION ---
+# --- HELPER FUNCTIONS ---
+def to_base64(uploaded_file):
+    if uploaded_file:
+        return base64.b64encode(uploaded_file.getvalue()).decode()
+    return None
+
 @st.cache_resource
-def initialize_gsheets():
+def init_gsheet():
     try:
-        service_account_info = st.secrets["gcp_service_account"]
+        creds_dict = st.secrets["gcp_service_account"]
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        creds = ServiceAccountCredentials.from_json(service_account_info, scope)
-        client = gspread.authorize(creds)
-        spreadsheet = client.open('2025 Amhara Planting Survey') 
-        return spreadsheet.get_worksheet(0)
-    except Exception as e:
-        return None
+        creds = ServiceAccountCredentials.from_json(creds_dict, scope)
+        return gspread.authorize(creds).open('2025 Amhara Planting Survey').get_worksheet(0)
+    except: return None
 
-# --- PAGE: HOME (DASHBOARD) ---
+# --- PAGES ---
 def home_page():
-    st.title(f"🌾 2025 Amhara Planting Survey")
-    st.info(f"Welcome back, **{st.session_state['username']}**")
+    st.title("🌾 Amhara Planting Survey 2025")
+    st.write(f"User: **{st.session_state['username']}**")
     st.divider()
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("📝 NEW REGISTRATION", use_container_width=True, type="primary"):
-            change_page("Registration")
-        if st.button("📍 SETUP LOCATIONS (Woreda/Kebele)", use_container_width=True):
-            change_page("Locations")
-    with col2:
-        if st.button("💾 EXPORT & DOWNLOAD DATA", use_container_width=True):
-            change_page("Download")
-        if st.button("🛠️ EDIT/DELETE RECORDS", use_container_width=True):
-            change_page("EditRecords")
+    c1, c2 = st.columns(2)
+    if c1.button("📝 NEW REGISTRATION", use_container_width=True, type="primary"): nav("Register")
+    if c1.button("📍 SETUP LOCATIONS", use_container_width=True): nav("Locations")
+    if c2.button("💾 EXPORT DATA", use_container_width=True): nav("Download")
+    if c2.button("🛠️ EDIT RECORDS", use_container_width=True): nav("Edit")
 
-# --- PAGE: REGISTRATION ---
 def register_page():
-    if st.button("⬅️ Back to Home"): change_page("Home")
-    st.header("📝 Farmer Registration Form")
+    st.button("⬅️ Back", on_click=lambda: nav("Home"))
+    st.header("📝 Farmer Registration")
     db = SessionLocal()
+    woredas = db.query(Woreda).all()
     
-    # Fetch Woredas for dropdown
-    woreda_objs = db.query(Woreda).all()
-    woreda_names = [w.name for w in woreda_objs]
-
     with st.form("reg_form", clear_on_submit=True):
         name = st.text_input("Farmer Full Name")
+        sel_woreda = st.selectbox("Select Woreda", ["Select..."] + [w.name for w in woredas])
         
-        # Select Woreda
-        sel_woreda = st.selectbox("Select Woreda", ["Select..."] + woreda_names)
-        
-        # Dynamic Kebele Selection
         kebeles = []
         if sel_woreda != "Select...":
             w_obj = db.query(Woreda).filter(Woreda.name == sel_woreda).first()
-            if w_obj:
-                kebeles = [k.name for k in w_obj.kebeles]
+            kebeles = [k.name for k in w_obj.kebeles] if w_obj else []
         
-        sel_kebele = st.selectbox("Select Kebele", ["Select..."] + kebeles if kebeles else ["No Kebeles Found"])
+        sel_kebele = st.selectbox("Select Kebele", ["Select..."] + kebeles)
         phone = st.text_input("Phone Number")
-        audio_file = st.file_uploader("🎤 Upload Audio Recording", type=["mp3", "wav", "m4a"])
+        audio = st.file_uploader("🎤 Upload Audio", type=['mp3', 'wav', 'm4a'])
         
         if st.form_submit_button("Save Registration"):
-            if not name or sel_woreda == "Select..." or sel_kebele == "Select...":
-                st.error("⚠️ Please fill Name, Woreda, and Kebele.")
-            else:
-                path = None
-                if audio_file:
-                    path = os.path.join(AUDIO_UPLOAD_DIR, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{audio_file.name}")
-                    with open(path, "wb") as f: f.write(audio_file.getbuffer())
-                
-                new_entry = Farmer(
+            if name and sel_woreda != "Select..." and sel_kebele != "Select...":
+                new_farmer = Farmer(
                     name=name, woreda=sel_woreda, kebele=sel_kebele,
-                    phone=phone, audio_path=path,
+                    phone=phone, audio_data=to_base64(audio),
                     registered_by=st.session_state["username"]
                 )
-                db.add(new_entry)
-                db.commit()
-                st.success(f"✅ Record for {name} saved!")
+                db.add(new_farmer); db.commit()
+                st.success("✅ Saved!")
+            else: st.error("Missing Info")
     db.close()
 
-# --- PAGE: SETUP LOCATIONS ---
-def manage_locations():
-    if st.button("⬅️ Back to Home"): change_page("Home")
-    st.header("📍 Manage Woredas & Kebeles")
-    db = SessionLocal()
-    
-    t1, t2 = st.tabs(["📥 Import & Sync", "✏️ Edit/Delete List"])
-    
-    with t1:
-        st.subheader("🔗 Google Sheet Sync")
-        if st.button("🔄 Pull Woredas from GSheet"):
-            sheet = initialize_gsheets()
-            if sheet:
-                records = sheet.get_all_records()
-                count = 0
-                for r in records:
-                    w_name = str(r.get("Woreda", r.get("Dep", ""))).strip()
-                    if w_name and not db.query(Woreda).filter(Woreda.name == w_name).first():
-                        db.add(Woreda(name=w_name))
-                        count += 1
-                db.commit()
-                st.success(f"✅ {count} New Woredas Imported!")
-            else: st.error("Sync Failed! Check GSheet Name or Secrets.")
-        
-        st.divider()
-        st.subheader("📄 Excel/CSV Bulk Upload")
-        uploaded = st.file_uploader("Upload CSV (Columns: Woreda, Kebele)", type="csv")
-        if uploaded:
-            df = pd.read_csv(uploaded)
-            for _, r in df.iterrows():
-                w_n, k_n = str(r['Woreda']).strip(), str(r['Kebele']).strip()
-                w_obj = db.query(Woreda).filter(Woreda.name == w_n).first()
-                if not w_obj:
-                    w_obj = Woreda(name=w_n); db.add(w_obj); db.commit()
-                if not db.query(Kebele).filter(Kebele.name == k_n, Kebele.woreda_id == w_obj.id).first():
-                    db.add(Kebele(name=k_n, woreda_id=w_obj.id))
-            db.commit(); st.success("✅ Locations Uploaded!")
-
-    with t2:
-        woredas = db.query(Woreda).all()
-        for w in woredas:
-            with st.expander(f"📌 {w.name}"):
-                c1, c2, c3 = st.columns([2, 1, 1])
-                new_w = c1.text_input("Rename Woreda", w.name, key=f"w{w.id}")
-                if c2.button("Update", key=f"ub{w.id}"):
-                    w.name = new_w; db.commit(); st.rerun()
-                if c3.button("🗑️ Delete Woreda", key=f"dw{w.id}"):
-                    db.delete(w); db.commit(); st.rerun()
-                
-                for k in w.kebeles:
-                    ck1, ck2 = st.columns([3, 1])
-                    ck1.write(f"• {k.name}")
-                    if ck2.button("🗑️", key=f"dk{k.id}"):
-                        db.delete(k); db.commit(); st.rerun()
-    db.close()
-
-# --- PAGE: EDIT RECORDS ---
-def edit_records_page():
-    if st.button("⬅️ Back to Home"): change_page("Home")
-    st.header("🛠️ Edit Farmer Data")
-    db = SessionLocal()
-    farmers = db.query(Farmer).all()
-    for f in farmers:
-        with st.expander(f"👤 {f.name} - {f.kebele}"):
-            c1, c2 = st.columns(2)
-            n_name = c1.text_input("Edit Name", f.name, key=f"fn{f.id}")
-            n_phone = c2.text_input("Edit Phone", f.phone, key=f"fp{f.id}")
-            if st.button("Save Changes", key=f"fs{f.id}"):
-                f.name, f.phone = n_name, n_phone
-                db.commit(); st.success("Updated!"); st.rerun()
-            if st.button("🗑️ Delete Record", key=f"fdel{f.id}", type="secondary"):
-                db.delete(f); db.commit(); st.rerun()
-    db.close()
-
-# --- PAGE: DOWNLOAD ---
 def download_page():
-    if st.button("⬅️ Back to Home"): change_page("Home")
-    st.header("💾 Export Survey Data")
+    st.button("⬅️ Back", on_click=lambda: nav("Home"))
     db = SessionLocal()
     farmers = db.query(Farmer).all()
     if farmers:
-        df = pd.DataFrame([{
-            "Farmer": f.name, "Woreda": f.woreda, "Kebele": f.kebele, 
-            "Phone": f.phone, "Surveyor": f.registered_by, "Date": f.timestamp
-        } for f in farmers])
+        df = pd.DataFrame([{"ID": f.id, "Farmer": f.name, "Woreda": f.woreda, "Kebele": f.kebele, "Phone": f.phone} for f in farmers])
         st.dataframe(df, use_container_width=True)
-        # Use utf-8-sig so Excel handles Ethiopian names correctly
-        csv = df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button("📥 Download Excel (CSV)", csv, "Amhara_Survey_Data.csv", "text/csv")
-    else: st.info("No records found.")
+        
+        # Audio ZIP
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as zf:
+            for f in farmers:
+                if f.audio_data:
+                    zf.writestr(f"{f.name}_{f.kebele}.mp3", base64.b64decode(f.audio_data))
+        
+        st.download_button("📥 Download Excel", df.to_csv(index=False).encode('utf-8-sig'), "Survey_Data.csv")
+        st.download_button("🎤 Download Audios (ZIP)", buf.getvalue(), "Audios.zip")
     db.close()
 
-# --- MAIN NAVIGATION ---
-def main():
-    if "logged_in" not in st.session_state or not st.session_state["logged_in"]:
-        st.title("🚜 2025 Amhara Survey Login")
-        with st.container(border=True):
-            u = st.text_input("Username")
-            p = st.text_input("Password", type="password")
-            if st.button("Enter System", use_container_width=True, type="primary"):
-                if login_user(u, p):
-                    st.session_state["logged_in"] = True
-                    st.session_state["username"] = u
-                    st.rerun()
-                else: st.error("❌ Invalid Username or Password")
-    else:
-        st.sidebar.write(f"Logged in as: **{st.session_state['username']}**")
-        if st.sidebar.button("Logout", use_container_width=True):
-            st.session_state.clear()
-            st.rerun()
-            
-        page = st.session_state["current_page"]
-        if page == "Home": home_page()
-        elif page == "Registration": register_page()
-        elif page == "Locations": manage_locations()
-        elif page == "Download": download_page()
-        elif page == "EditRecords": edit_records_page()
+def manage_locations():
+    st.button("⬅️ Back", on_click=lambda: nav("Home"))
+    db = SessionLocal()
+    if st.button("🔄 Sync Woredas from Google Sheets"):
+        sheet = init_gsheet()
+        if sheet:
+            records = sheet.get_all_records()
+            for r in records:
+                w_name = str(r.get("Woreda", "")).strip()
+                if w_name and not db.query(Woreda).filter(Woreda.name == w_name).first():
+                    db.add(Woreda(name=w_name))
+            db.commit(); st.success("Synced!")
+    
+    st.divider()
+    uploaded = st.file_uploader("Bulk Upload Locations (CSV: Woreda, Kebele)", type="csv")
+    if uploaded:
+        df = pd.read_csv(uploaded)
+        for _, r in df.iterrows():
+            w_n, k_n = str(r['Woreda']).strip(), str(r['Kebele']).strip()
+            w_obj = db.query(Woreda).filter(Woreda.name == w_n).first()
+            if not w_obj:
+                w_obj = Woreda(name=w_n); db.add(w_obj); db.commit()
+            if not db.query(Kebele).filter(Kebele.name == k_n, Kebele.woreda_id == w_obj.id).first():
+                db.add(Kebele(name=k_n, woreda_id=w_obj.id))
+        db.commit(); st.success("Uploaded!")
+    db.close()
 
-if __name__ == "__main__":
-    main()
+# --- MAIN ---
+def main():
+    if not st.session_state["logged_in"]:
+        st.title("🚜 Survey Login")
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
+        if st.button("Login"):
+            if u == "admin" and p == "oaf2025": # Simple auth
+                st.session_state["logged_in"] = True
+                st.session_state["username"] = u
+                st.rerun()
+            else: st.error("Invalid")
+    else:
+        pg = st.session_state["current_page"]
+        if pg == "Home": home_page()
+        elif pg == "Register": register_page()
+        elif pg == "Locations": manage_locations()
+        elif pg == "Download": download_page()
+
+if __name__ == "__main__": main()
