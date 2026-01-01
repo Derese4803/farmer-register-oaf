@@ -10,13 +10,8 @@ from models import Farmer, Woreda, Kebele, create_tables
 st.set_page_config(page_title="2025 Amhara Survey", page_icon="🌾", layout="wide")
 create_tables()
 
-# Navigation State
 if "current_page" not in st.session_state:
     st.session_state["current_page"] = "Home"
-
-def nav(page):
-    st.session_state["current_page"] = page
-    st.rerun()
 
 def to_base64(uploaded_file):
     if uploaded_file:
@@ -27,15 +22,21 @@ def to_base64(uploaded_file):
 def home_page():
     st.title("🌾 Amhara Planting Survey 2025")
     st.divider()
-    c1, c2 = st.columns(2)
-    if c1.button("📝 NEW REGISTRATION", use_container_width=True, type="primary"):
-        nav("Register")
-    if c2.button("📊 VIEW & DOWNLOAD DATA", use_container_width=True):
-        nav("Download")
+    col1, col2 = st.columns(2)
+    
+    if col1.button("📝 NEW REGISTRATION", use_container_width=True, type="primary"):
+        st.session_state["current_page"] = "Register"
+        st.rerun()
+    if col2.button("📊 VIEW & DOWNLOAD DATA", use_container_width=True):
+        st.session_state["current_page"] = "Download"
+        st.rerun()
 
 # --- PAGE: REGISTRATION ---
 def register_page():
-    st.button("⬅️ Back to Home", on_click=lambda: nav("Home"), key="back_reg")
+    if st.button("⬅️ Back to Home"):
+        st.session_state["current_page"] = "Home"
+        st.rerun()
+        
     st.header("📝 Farmer Registration")
     db = SessionLocal()
     
@@ -43,35 +44,34 @@ def register_page():
         woreda_objs = db.query(Woreda).order_by(Woreda.name).all()
         woreda_list = [w.name for w in woreda_objs]
         
-        with st.form(key="farmer_reg_final", clear_on_submit=True):
-            # Editor Name
-            editor_name = st.text_input("Editor Name / የመዝጋቢው ስም", key="editor_in")
+        with st.form(key="farmer_reg_v4", clear_on_submit=True):
+            editor_name = st.text_input("Editor Name / የመዝጋቢው ስም", key="editor_val")
             st.divider()
             
-            farmer_name = st.text_input("Farmer Full Name / የገበሬው ሙሉ ስም", key="f_name_in")
+            farmer_name = st.text_input("Farmer Full Name / የገበሬው ሙሉ ስም", key="f_val")
             
             st.write("📍 **Location Details**")
             w_col1, w_col2 = st.columns(2)
-            sel_woreda = w_col1.selectbox("Select Woreda", ["None / አዲስ ጻፍ"] + woreda_list, key="w_s")
-            type_woreda = w_col2.text_input("Or Type New Woreda", key="w_t")
+            sel_woreda = w_col1.selectbox("Select Woreda", ["None / አዲስ ጻፍ"] + woreda_list, key="ws")
+            type_woreda = w_col2.text_input("Or Type New Woreda", key="wt")
             final_woreda = type_woreda.strip() if type_woreda.strip() else (None if sel_woreda == "None / አዲስ ጻፍ" else sel_woreda)
 
             k_col1, k_col2 = st.columns(2)
-            kebeles = []
+            kb_list = []
             if final_woreda and sel_woreda != "None / አዲስ ጻፍ":
                 w_obj = db.query(Woreda).filter(Woreda.name == final_woreda).first()
-                if w_obj: kebeles = [k.name for k in w_obj.kebeles]
+                if w_obj: kb_list = [k.name for k in w_obj.kebeles]
             
-            sel_kebele = k_col1.selectbox("Select Kebele", ["None / አዲስ ጻፍ"] + kebeles, key="k_s")
-            type_kebele = k_col2.text_input("Or Type New Kebele", key="k_t")
+            sel_kebele = k_col1.selectbox("Select Kebele", ["None / አዲስ ጻፍ"] + kb_list, key="ks")
+            type_kebele = k_col2.text_input("Or Type New Kebele", key="kt")
             final_kebele = type_kebele.strip() if type_kebele.strip() else (None if sel_kebele == "None / አዲስ ጻፍ" else sel_kebele)
 
-            phone = st.text_input("Phone Number / ስልክ ቁጥር", key="ph_in")
-            audio = st.file_uploader("🎤 Upload Audio Recording", type=['mp3', 'wav', 'm4a'], key="aud_in")
+            phone = st.text_input("Phone Number / ስልክ ቁጥር", key="ph")
+            audio = st.file_uploader("🎤 Upload Audio Recording", type=['mp3', 'wav', 'm4a'], key="aud")
             
             if st.form_submit_button("Save Registration"):
                 if farmer_name and final_woreda and final_kebele and editor_name:
-                    # Logic to save/link Woreda & Kebele
+                    # Sync Woreda/Kebele
                     w_obj = db.query(Woreda).filter(Woreda.name == final_woreda).first()
                     if not w_obj:
                         w_obj = Woreda(name=final_woreda)
@@ -80,12 +80,10 @@ def register_page():
                     if not k_obj:
                         db.add(Kebele(name=final_kebele, woreda_id=w_obj.id)); db.commit()
                     
-                    # Save Farmer Record
-                    new_farmer = Farmer(
-                        name=farmer_name, woreda=final_woreda, kebele=final_kebele,
-                        phone=phone, audio_data=to_base64(audio), registered_by=editor_name
-                    )
-                    db.add(new_farmer); db.commit()
+                    # Save Farmer
+                    new_f = Farmer(name=farmer_name, woreda=final_woreda, kebele=final_kebele,
+                                   phone=phone, audio_data=to_base64(audio), registered_by=editor_name)
+                    db.add(new_f); db.commit()
                     st.success(f"✅ Saved! Registered by: {editor_name}")
                 else:
                     st.error("⚠️ All fields (Name, Woreda, Kebele, Editor) are required.")
@@ -94,28 +92,28 @@ def register_page():
 
 # --- PAGE: DOWNLOAD (PASSCODE PROTECTED) ---
 def download_page():
-    st.button("⬅️ Back to Home", on_click=lambda: nav("Home"), key="back_dl")
+    if st.button("⬅️ Back to Home"):
+        st.session_state["current_page"] = "Home"
+        st.rerun()
+        
     st.header("📊 Admin Data Access")
+    passcode = st.text_input("Enter Passcode to View Data", type="password", key="p_gate")
     
-    # Passcode Gate
-    passcode = st.text_input("Enter Passcode to View Data", type="password", key="pass_gate")
-    
-    if passcode == "oaf2025": # You can change this passcode
+    if passcode == "oaf2025":
         db = SessionLocal()
         try:
             farmers = db.query(Farmer).all()
             if farmers:
-                data = [{
+                df = pd.DataFrame([{
                     "ID": f.id, "Farmer": f.name, "Woreda": f.woreda, "Kebele": f.kebele, 
                     "Phone": f.phone, "Registered By": f.registered_by, "Date": f.timestamp
-                } for f in farmers]
-                df = pd.DataFrame(data)
+                } for f in farmers])
                 st.dataframe(df, use_container_width=True)
                 
                 c1, c2 = st.columns(2)
-                c1.download_button("📥 Download Excel (CSV)", df.to_csv(index=False).encode('utf-8-sig'), "Survey_Export.csv", "text/csv")
+                c1.download_button("📥 Download CSV", df.to_csv(index=False).encode('utf-8-sig'), "Survey.csv", "text/csv")
                 
-                # Audio ZIP Logic
+                # Audio ZIP
                 buf = BytesIO()
                 with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as zf:
                     count = 0
@@ -132,6 +130,7 @@ def download_page():
     elif passcode != "":
         st.error("❌ Incorrect Passcode")
 
+# --- MAIN ---
 def main():
     pg = st.session_state["current_page"]
     if pg == "Home": home_page()
@@ -140,3 +139,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
