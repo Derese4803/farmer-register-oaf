@@ -71,7 +71,6 @@ def register_page():
             
             if st.form_submit_button("Save Registration"):
                 if farmer_name and final_woreda and final_kebele and editor_name:
-                    # Sync Woreda/Kebele
                     w_obj = db.query(Woreda).filter(Woreda.name == final_woreda).first()
                     if not w_obj:
                         w_obj = Woreda(name=final_woreda)
@@ -80,7 +79,6 @@ def register_page():
                     if not k_obj:
                         db.add(Kebele(name=final_kebele, woreda_id=w_obj.id)); db.commit()
                     
-                    # Save Farmer
                     new_f = Farmer(name=farmer_name, woreda=final_woreda, kebele=final_kebele,
                                    phone=phone, audio_data=to_base64(audio), registered_by=editor_name)
                     db.add(new_f); db.commit()
@@ -97,13 +95,19 @@ def download_page():
         st.rerun()
         
     st.header("📊 Admin Data Access")
-    passcode = st.text_input("Enter Passcode to View Data", type="password", key="p_gate")
     
-    if passcode == "oaf2025":
+    # --- Passcode Entry ---
+    passcode = st.text_input("Enter Passcode to View Data / የይለፍ ቃል ያስገቡ", type="password", key="p_gate")
+    
+    if passcode == "oaf2025": # <--- CHANGE YOUR PASSCODE HERE
+        st.success("Access Granted / ተፈቅዷል")
+        st.divider()
+        
         db = SessionLocal()
         try:
             farmers = db.query(Farmer).all()
             if farmers:
+                # 1. Show Table
                 df = pd.DataFrame([{
                     "ID": f.id, "Farmer": f.name, "Woreda": f.woreda, "Kebele": f.kebele, 
                     "Phone": f.phone, "Registered By": f.registered_by, "Date": f.timestamp
@@ -111,9 +115,11 @@ def download_page():
                 st.dataframe(df, use_container_width=True)
                 
                 c1, c2 = st.columns(2)
+                
+                # 2. Download CSV
                 c1.download_button("📥 Download CSV", df.to_csv(index=False).encode('utf-8-sig'), "Survey.csv", "text/csv")
                 
-                # Audio ZIP
+                # 3. Download Audio ZIP
                 buf = BytesIO()
                 with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as zf:
                     count = 0
@@ -128,7 +134,7 @@ def download_page():
         finally:
             db.close()
     elif passcode != "":
-        st.error("❌ Incorrect Passcode")
+        st.error("❌ Incorrect Passcode / ትክክል ያልሆነ የይለፍ ቃል")
 
 # --- MAIN ---
 def main():
