@@ -20,7 +20,7 @@ class Farmer(Base):
     audio_data = Column(Text) 
     registered_by = Column(String)
 
-engine = create_engine("sqlite:///./survey_2025.db", connect_args={"check_same_thread": False})
+engine = create_engine("sqlite:///./survey_final_2025.db", connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine)
 Base.metadata.create_all(bind=engine)
 
@@ -33,7 +33,6 @@ def to_b64(file):
 if "page" not in st.session_state: st.session_state["page"] = "Home"
 if "auth" not in st.session_state: st.session_state["auth"] = False
 if "editor" not in st.session_state: st.session_state["editor"] = None
-if "edit_id" not in st.session_state: st.session_state["edit_id"] = None
 
 def nav(p):
     st.session_state["page"] = p
@@ -43,12 +42,12 @@ def nav(p):
 if st.session_state["page"] == "Home":
     st.title("🌾 Amhara Survey 2025")
     if st.session_state["editor"]:
-        st.success(f"👤 Editor: **{st.session_state['editor']}**")
+        st.success(f"👤 Active Editor: **{st.session_state['editor']}**")
     
     st.divider()
     col1, col2 = st.columns(2)
     if col1.button("📝 NEW REGISTRATION", use_container_width=True, type="primary"): nav("Reg")
-    if col2.button("📊 VIEW & MANAGE DATA", use_container_width=True): nav("Data")
+    if col2.button("📊 VIEW & DELETE DATA", use_container_width=True): nav("Data")
 
 # --- 5. PAGE: REGISTRATION ---
 elif st.session_state["page"] == "Reg":
@@ -56,31 +55,29 @@ elif st.session_state["page"] == "Reg":
     
     if not st.session_state["editor"]:
         with st.container(border=True):
-            st.subheader("Editor Login (Enter Name Once)")
-            name_in = st.text_input("Registered By:")
-            if st.button("Start"):
+            st.subheader("Login Once")
+            name_in = st.text_input("Enter Your Name (Registered By):")
+            if st.button("Login"):
                 if name_in.strip():
                     st.session_state["editor"] = name_in.strip()
                     st.rerun()
     else:
         with st.form("reg_form", clear_on_submit=True):
-            st.info(f"Active Editor: {st.session_state['editor']}")
+            st.info(f"Editor: {st.session_state['editor']}")
             f_name = st.text_input("Farmer Name")
             woreda = st.text_input("Woreda")
             phone = st.text_input("Phone Number")
             audio = st.file_uploader("🎤 Audio Recording", type=['mp3','wav','m4a'])
             
-            if st.form_submit_button("Save Registration"):
+            if st.form_submit_button("Save"):
                 if f_name and woreda:
                     db = SessionLocal()
                     db.add(Farmer(name=f_name, woreda=woreda, phone=phone, 
                                   audio_data=to_b64(audio), registered_by=st.session_state["editor"]))
                     db.commit(); db.close()
                     st.success("✅ Saved!")
-                else:
-                    st.error("Name and Woreda are required.")
 
-# --- 6. PAGE: DATA MANAGEMENT (Individual Records & Downloads) ---
+# --- 6. PAGE: DATA MANAGEMENT (CLEARED RECORDS & DELETE ALL) ---
 elif st.session_state["page"] == "Data":
     st.button("⬅️ Home", on_click=lambda: nav("Home"))
     
@@ -93,34 +90,42 @@ elif st.session_state["page"] == "Data":
         db = SessionLocal()
         farmers = db.query(Farmer).order_by(Farmer.id.desc()).all()
         
-        st.header("📊 Management & Downloads")
+        st.header("📊 Admin Dashboard")
 
         if farmers:
-            # --- TOP SECTION: DOWNLOADS & DELETE ALL ---
-            col_dl1, col_dl2, col_del = st.columns([1,1,1])
+            # --- DOWNLOADS ---
+            c1, c2 = st.columns(2)
+            df = pd.DataFrame([{"ID": f.id, "Name": f.name, "Woreda": f.woreda, "Editor": f.registered_by} for f in farmers])
+            c1.download_button("📥 Excel Download", df.to_csv(index=False).encode('utf-8-sig'), "SurveyData.csv")
             
-            # Excel Download
-            df = pd.DataFrame([{
-                "ID": f.id, "Name": f.name, "Woreda": f.woreda, "Phone": f.phone,
-                "Editor": f.registered_by, "Date": f.timestamp
-            } for f in farmers])
-            col_dl1.download_button("📥 Excel (CSV)", df.to_csv(index=False).encode('utf-8-sig'), "SurveyData.csv", "text/csv")
-            
-            # Audio ZIP Download
             z_buf = BytesIO()
-            with zipfile.ZipFile(z_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            with zipfile.ZipFile(z_buf, "w") as zf:
                 for f in farmers:
-                    if f.audio_data:
-                        zf.writestr(f"ID_{f.id}_{f.name}.mp3", base64.b64decode(f.audio_data))
-            col_dl2.download_button("🎤 Audio ZIP", z_buf.getvalue(), "Audios.zip", "application/zip")
-            
-            # GLOBAL DELETE ALL BUTTON
-            if col_del.button("🗑️ DELETE ALL RECORDS", type="primary", use_container_width=True):
+                    if f.audio_data: zf.writestr(f"ID_{f.id}_{f.name}.mp3", base64.b64decode(f.audio_data))
+            c2.download_button("🎤 Audio ZIP", z_buf.getvalue(), "Audios.zip")
+
+            st.divider()
+
+            # --- DELETE ALL BUTTON (Requested) ---
+            if st.button("🗑️ DELETE ALL RECORDS FROM DATABASE", type="primary", use_container_width=True):
                 db.query(Farmer).delete()
                 db.commit()
                 st.rerun()
 
             st.divider()
+
+            # --- CLEAN INDIVIDUAL RECORDS VIEW ---
+            st.subheader("📝 Registered Records")
+            for f in farmers:
+                with st.container(border=True):
+                    # Clean look as requested: ID | Name (Woreda) | Editor
+                    st.write(f"**ID: {f.id}** | {f.name} ({f.woreda}) | 👤 {f.registered_by}")
+                    
+                    # Individual Delete button for each ID
+                    if st.button(f"Delete ID: {f.id}", key=f"del_{f.id}"):
+                        db.delete(f)
+                        db.commit()
+                        st.rerun()
         else:
-            st.info("No records found.")
+            st.info("Database is empty.")
         db.close()
