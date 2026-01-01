@@ -10,12 +10,9 @@ from models import Farmer, Woreda, Kebele, create_tables
 st.set_page_config(page_title="2025 Amhara Survey", page_icon="🌾", layout="wide")
 create_tables()
 
+# Navigation logic (Removed st.rerun from callback)
 if "current_page" not in st.session_state:
     st.session_state["current_page"] = "Home"
-
-def nav(page):
-    st.session_state["current_page"] = page
-    st.rerun()
 
 def to_base64(uploaded_file):
     if uploaded_file:
@@ -28,14 +25,21 @@ def home_page():
     st.write("Welcome to the digital registration system.")
     st.divider()
     col1, col2 = st.columns(2)
+    
+    # Navigation buttons update state; Streamlit reruns automatically
     if col1.button("📝 NEW REGISTRATION", use_container_width=True, type="primary"):
-        nav("Register")
+        st.session_state["current_page"] = "Register"
+        st.rerun()
     if col2.button("📊 VIEW & DOWNLOAD DATA", use_container_width=True):
-        nav("Download")
+        st.session_state["current_page"] = "Download"
+        st.rerun()
 
 # --- PAGE: REGISTRATION ---
 def register_page():
-    st.button("⬅️ Back to Home", on_click=lambda: nav("Home"), key="nav_home_reg")
+    if st.button("⬅️ Back to Home"):
+        st.session_state["current_page"] = "Home"
+        st.rerun()
+        
     st.header("📝 Farmer Registration")
     db = SessionLocal()
     
@@ -44,12 +48,10 @@ def register_page():
         woreda_list = [w.name for w in woreda_objs]
         
         with st.form(key="farmer_reg_v2", clear_on_submit=True):
-            # NEW: Editor Name Field
-            editor_name = st.text_input("Editor Name / የመዝጋቢው ስም", placeholder="Enter your name here", key="editor_name")
-            
+            editor_name = st.text_input("Editor Name / የመዝጋቢው ስም", key="editor_name")
             st.divider()
             
-            name = st.text_input("Farmer Full Name / የገበሬው ሙሉ ስም", key="f_name")
+            farmer_name = st.text_input("Farmer Full Name / የገበሬው ሙሉ ስም", key="f_name")
             
             st.write("📍 **Location Details**")
             w_col1, w_col2 = st.columns(2)
@@ -74,9 +76,8 @@ def register_page():
             submit_btn = st.form_submit_button("Save Registration")
             
             if submit_btn:
-                # Validation including the Editor Name
-                if name and final_woreda and final_kebele and editor_name:
-                    # Save Woreda/Kebele logic
+                if farmer_name and final_woreda and final_kebele and editor_name:
+                    # Database Logic
                     w_obj = db.query(Woreda).filter(Woreda.name == final_woreda).first()
                     if not w_obj:
                         w_obj = Woreda(name=final_woreda)
@@ -86,17 +87,12 @@ def register_page():
                     if not k_obj:
                         db.add(Kebele(name=final_kebele, woreda_id=w_obj.id)); db.commit()
                     
-                    # Save Farmer with Editor Name
                     new_farmer = Farmer(
-                        name=name, 
-                        woreda=final_woreda, 
-                        kebele=final_kebele,
-                        phone=phone, 
-                        audio_data=to_base64(audio), 
-                        registered_by=editor_name # Saves the editor's name
+                        name=farmer_name, woreda=final_woreda, kebele=final_kebele,
+                        phone=phone, audio_data=to_base64(audio), registered_by=editor_name
                     )
                     db.add(new_farmer); db.commit()
-                    st.success(f"✅ Saved {name} (Registered by {editor_name})!")
+                    st.success(f"✅ Saved! Registered by {editor_name}")
                 else:
                     st.error("⚠️ Fill Name, Woreda, Kebele, and Editor Name.")
     finally:
@@ -104,27 +100,25 @@ def register_page():
 
 # --- PAGE: DOWNLOAD ---
 def download_page():
-    st.button("⬅️ Back to Home", on_click=lambda: nav("Home"), key="nav_home_dl")
+    if st.button("⬅️ Back to Home"):
+        st.session_state["current_page"] = "Home"
+        st.rerun()
+
     st.header("📊 Data Export")
     db = SessionLocal()
     try:
         farmers = db.query(Farmer).all()
         if farmers:
             df = pd.DataFrame([{
-                "ID": f.id, 
-                "Farmer": f.name, 
-                "Woreda": f.woreda, 
-                "Kebele": f.kebele, 
-                "Phone": f.phone, 
-                "Registered By": f.registered_by, # Now visible in the export
-                "Date": f.timestamp
+                "ID": f.id, "Farmer": f.name, "Woreda": f.woreda, "Kebele": f.kebele, 
+                "Phone": f.phone, "Editor": f.registered_by, "Date": f.timestamp
             } for f in farmers])
             st.dataframe(df, use_container_width=True)
             
             c1, c2 = st.columns(2)
-            c1.download_button("📥 Download Excel (CSV)", df.to_csv(index=False).encode('utf-8-sig'), "Survey.csv", "text/csv", key="csv_btn")
+            c1.download_button("📥 Download Excel (CSV)", df.to_csv(index=False).encode('utf-8-sig'), "Survey.csv", "text/csv")
             
-            # ZIP Audio Logic
+            # ZIP Audio Export
             zip_buffer = BytesIO()
             with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zf:
                 audio_count = 0
@@ -135,12 +129,13 @@ def download_page():
                         audio_count += 1
             
             if audio_count > 0:
-                c2.download_button(f"🎤 Download {audio_count} Audios (ZIP)", zip_buffer.getvalue(), "Audios.zip", "application/zip", key="zip_btn")
+                c2.download_button(f"🎤 Download {audio_count} Audios (ZIP)", zip_buffer.getvalue(), "Audios.zip", "application/zip")
         else:
             st.info("No records yet.")
     finally:
         db.close()
 
+# --- MAIN ENGINE ---
 def main():
     pg = st.session_state["current_page"]
     if pg == "Home": home_page()
