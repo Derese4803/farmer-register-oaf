@@ -26,7 +26,7 @@ class Farmer(Base):
     woreda = Column(String)
     kebele = Column(String)
     phone = Column(String)
-    audio_data = Column(Text) # Storing as base64 for cloud compatibility
+    audio_data = Column(Text)  # Base64 string of the audio
     registered_by = Column(String)
 
 def create_tables():
