@@ -17,6 +17,8 @@ if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 if "editor_name" not in st.session_state:
     st.session_state["editor_name"] = None
+if "editing_id" not in st.session_state:
+    st.session_state["editing_id"] = None
 
 def to_base64(uploaded_file):
     if uploaded_file:
@@ -26,10 +28,8 @@ def to_base64(uploaded_file):
 # --- PAGE: HOME ---
 def home_page():
     st.title("🌾 Amhara Planting Survey 2025")
-    
-    # Show active editor if "logged in"
     if st.session_state["editor_name"]:
-        st.success(f"👤 Active Editor: **{st.session_state['editor_name']}**")
+        st.info(f"👤 Current Editor: **{st.session_state['editor_name']}**")
     
     st.divider()
     col1, col2 = st.columns(2)
@@ -37,142 +37,121 @@ def home_page():
     if col1.button("📝 NEW REGISTRATION", use_container_width=True, type="primary"):
         st.session_state["current_page"] = "Register"
         st.rerun()
-    if col2.button("📊 VIEW & DOWNLOAD DATA", use_container_width=True):
+    if col2.button("📊 VIEW & MANAGE DATA", use_container_width=True):
         st.session_state["current_page"] = "Download"
         st.rerun()
 
 # --- PAGE: REGISTRATION ---
 def register_page():
-    col_a, col_b = st.columns([8, 2])
-    if col_a.button("⬅️ Back to Home"):
+    if st.button("⬅️ Back to Home"):
         st.session_state["current_page"] = "Home"
         st.rerun()
-    
-    # Logout for Editor
-    if st.session_state["editor_name"]:
-        if col_b.button("🔄 Change Editor"):
-            st.session_state["editor_name"] = None
-            st.rerun()
 
     st.header("📝 Farmer Registration")
-    
-    # STEP 1: Capture Editor Name ONCE
+
+    # LOGIN LOGIC: Ask for name ONLY ONCE
     if not st.session_state["editor_name"]:
-        st.info("Please identify yourself before starting.")
-        with st.form("editor_login"):
-            name_input = st.text_input("Enter Your Name (Editor) / የመዝጋቢው ስም")
-            if st.form_submit_button("Start Registering"):
+        with st.container(border=True):
+            st.subheader("Editor Login")
+            name_input = st.text_input("Enter Your Name to Begin")
+            if st.button("Start Registering"):
                 if name_input.strip():
                     st.session_state["editor_name"] = name_input.strip()
                     st.rerun()
                 else:
-                    st.error("Name is required.")
-        return # Stop here until name is provided
+                    st.error("Please enter a name.")
+        return
 
-    # STEP 2: Actual Registration Form
+    # REGISTRATION FORM
     db = SessionLocal()
     try:
         woreda_objs = db.query(Woreda).order_by(Woreda.name).all()
         woreda_list = [w.name for w in woreda_objs]
         
-        st.write(f"Logged in as: **{st.session_state['editor_name']}**")
-        
-        with st.form(key="farmer_reg_final", clear_on_submit=True):
-            farmer_name = st.text_input("Farmer Full Name / የገበሬው ሙሉ ስም")
+        with st.form(key="farmer_reg_form", clear_on_submit=True):
+            st.write(f"Logged in as: **{st.session_state['editor_name']}**")
+            farmer_name = st.text_input("Farmer Full Name")
             
-            st.write("📍 **Location Details**")
             w_col1, w_col2 = st.columns(2)
-            sel_woreda = w_col1.selectbox("Select Woreda", ["None / አዲስ ጻፍ"] + woreda_list)
+            sel_woreda = w_col1.selectbox("Select Woreda", ["None"] + woreda_list)
             type_woreda = w_col2.text_input("Or Type New Woreda")
-            final_woreda = type_woreda.strip() if type_woreda.strip() else (None if sel_woreda == "None / አዲስ ጻፍ" else sel_woreda)
+            final_woreda = type_woreda.strip() if type_woreda.strip() else (None if sel_woreda == "None" else sel_woreda)
 
-            k_col1, k_col2 = st.columns(2)
-            kb_list = []
-            if final_woreda and sel_woreda != "None / አዲስ ጻፍ":
-                w_obj = db.query(Woreda).filter(Woreda.name == final_woreda).first()
-                if w_obj: kb_list = [k.name for k in w_obj.kebeles]
-            
-            sel_kebele = k_col1.selectbox("Select Kebele", ["None / አዲስ ጻፍ"] + kb_list)
-            type_kebele = k_col2.text_input("Or Type New Kebele")
-            final_kebele = type_kebele.strip() if type_kebele.strip() else (None if sel_kebele == "None / አዲስ ጻፍ" else sel_kebele)
-
-            phone = st.text_input("Phone Number / ስልክ ቁጥር")
-            audio = st.file_uploader("🎤 Upload Audio Recording", type=['mp3', 'wav', 'm4a'])
+            phone = st.text_input("Phone Number")
+            audio = st.file_uploader("Upload Audio", type=['mp3', 'wav'])
             
             if st.form_submit_button("Save Registration"):
-                if farmer_name and final_woreda and final_kebele:
-                    # Sync Database
-                    w_obj = db.query(Woreda).filter(Woreda.name == final_woreda).first()
-                    if not w_obj:
-                        w_obj = Woreda(name=final_woreda)
-                        db.add(w_obj); db.commit(); db.refresh(w_obj)
-                    k_obj = db.query(Kebele).filter(Kebele.name == final_kebele, Kebele.woreda_id == w_obj.id).first()
-                    if not k_obj:
-                        db.add(Kebele(name=final_kebele, woreda_id=w_obj.id)); db.commit()
-                    
-                    # Save Farmer using session editor name
-                    new_f = Farmer(name=farmer_name, woreda=final_woreda, kebele=final_kebele,
-                                   phone=phone, audio_data=to_base64(audio), 
-                                   registered_by=st.session_state["editor_name"])
+                if farmer_name and final_woreda:
+                    new_f = Farmer(name=farmer_name, woreda=final_woreda, phone=phone, 
+                                   audio_data=to_base64(audio), registered_by=st.session_state["editor_name"])
                     db.add(new_f); db.commit()
-                    st.success(f"✅ Saved record for {farmer_name}!")
-                else:
-                    st.error("⚠️ Please fill all required fields.")
+                    st.success("✅ Saved Successfully!")
     finally:
         db.close()
 
-# --- PAGE: DOWNLOAD (PASSCODE PROTECTED) ---
+# --- PAGE: VIEW/EDIT/DELETE ---
 def download_page():
-    col_a, col_b = st.columns([8, 2])
-    if col_a.button("⬅️ Back to Home"):
+    if st.button("⬅️ Back to Home"):
         st.session_state["current_page"] = "Home"
         st.rerun()
+
+    st.header("📊 Data Management")
     
-    if st.session_state["authenticated"] and col_b.button("🔒 Admin Logout"):
-        st.session_state["authenticated"] = False
-        st.rerun()
-
-    st.header("📊 Admin Data Access")
-
+    # PASSCODE PROTECTION
     if not st.session_state["authenticated"]:
-        passcode = st.text_input("Enter Passcode", type="password")
+        passcode = st.text_input("Enter Admin Passcode", type="password")
         if passcode == "oaf2025":
             st.session_state["authenticated"] = True
             st.rerun()
-        elif passcode != "":
-            st.error("Incorrect Passcode")
-    else:
-        # DATA DISPLAY
-        db = SessionLocal()
-        try:
-            farmers = db.query(Farmer).all()
-            if farmers:
-                df = pd.DataFrame([{
-                    "ID": f.id, "Farmer": f.name, "Woreda": f.woreda, "Kebele": f.kebele, 
-                    "Phone": f.phone, "Registered By": f.registered_by, "Date": f.timestamp
-                } for f in farmers])
-                st.dataframe(df, use_container_width=True)
+        return
+
+    db = SessionLocal()
+    try:
+        farmers = db.query(Farmer).all()
+        if not farmers:
+            st.info("No records found.")
+            return
+
+        # DATA TABLE DISPLAY
+        for f in farmers:
+            with st.expander(f"👤 {f.name} - {f.woreda}"):
+                col1, col2, col3 = st.columns([2,1,1])
+                col1.write(f"**Phone:** {f.phone} | **Editor:** {f.registered_by}")
                 
-                c1, c2 = st.columns(2)
-                c1.download_button("📥 Download CSV", df.to_csv(index=False).encode('utf-8-sig'), "Survey.csv", "text/csv")
+                # EDIT BUTTON
+                if col2.button("✏️ Edit", key=f"edit_{f.id}"):
+                    st.session_state["editing_id"] = f.id
                 
-                buf = BytesIO()
-                with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as zf:
-                    for f in farmers:
-                        if f.audio_data:
-                            zf.writestr(f"{f.id}_{f.name.replace(' ','_')}.mp3", base64.b64decode(f.audio_data))
-                c2.download_button("🎤 Download All Audios (ZIP)", buf.getvalue(), "Audios.zip", "application/zip")
-            else:
-                st.info("No records yet.")
-        finally:
-            db.close()
+                # DELETE BUTTON
+                if col3.button("🗑️ Delete", key=f"del_{f.id}", type="secondary"):
+                    db.delete(f); db.commit()
+                    st.rerun()
+
+                # SHOW EDIT FORM IF CLICKED
+                if st.session_state["editing_id"] == f.id:
+                    with st.form(key=f"edit_form_{f.id}"):
+                        new_name = st.text_input("New Name", value=f.name)
+                        new_woreda = st.text_input("New Woreda", value=f.woreda)
+                        if st.form_submit_button("Update"):
+                            f.name = new_name
+                            f.woreda = new_woreda
+                            db.commit()
+                            st.session_state["editing_id"] = None
+                            st.rerun()
+        
+        st.divider()
+        # DOWNLOAD SECTION
+        df = pd.DataFrame([{"ID": f.id, "Name": f.name, "Woreda": f.woreda, "Editor": f.registered_by} for f in farmers])
+        st.download_button("📥 Download CSV", df.to_csv(index=False), "data.csv", "text/csv")
+        
+    finally:
+        db.close()
 
 # --- MAIN ENGINE ---
 def main():
-    pg = st.session_state["current_page"]
-    if pg == "Home": home_page()
-    elif pg == "Register": register_page()
-    elif pg == "Download": download_page()
+    if st.session_state["current_page"] == "Home": home_page()
+    elif st.session_state["current_page"] == "Register": register_page()
+    elif st.session_state["current_page"] == "Download": download_page()
 
 if __name__ == "__main__":
     main()
