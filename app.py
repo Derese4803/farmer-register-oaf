@@ -41,7 +41,7 @@ def nav(p):
 
 # --- 4. PAGE: HOME ---
 if st.session_state["page"] == "Home":
-    st.title("🌾 Amhara Survey 2026")
+    st.title("🌾 Amhara M&E Survey 2026")
     if st.session_state["editor"]:
         st.success(f"👤 Active Editor: **{st.session_state['editor']}**")
     
